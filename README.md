@@ -1,14 +1,14 @@
 ## FeelUOwn - feel your own
 
 [![Documentation Status](https://readthedocs.org/projects/feeluown/badge/?version=latest)](http://feeluown.readthedocs.org)
-[![Build Status](https://travis-ci.org/cosven/FeelUOwn.svg?branch=master)](https://travis-ci.org/cosven/FeelUOwn)
-[![Coverage Status](https://coveralls.io/repos/github/cosven/FeelUOwn/badge.svg?branch=master&service=github)](https://coveralls.io/github/cosven/FeelUOwn?branch=master)
-[![PyPI](https://img.shields.io/pypi/v/fuocore.svg)](https://pypi.python.org/pypi/feeluown)
+[![Build Status](https://travis-ci.com/feeluown/FeelUOwn.svg?branch=master)](https://travis-ci.com/feeluown/FeelUOwn)
+[![Coverage Status](https://coveralls.io/repos/github/feeluown/FeelUOwn/badge.svg)](https://coveralls.io/github/feeluown/FeelUOwn)
+[![PyPI](https://img.shields.io/pypi/v/feeluown.svg)](https://pypi.python.org/pypi/feeluown)
 [![python](https://img.shields.io/pypi/pyversions/fuocore.svg)](https://pypi.python.org/pypi/feeluown)
 
 FeelUOwn 是一个符合 Unix 哲学的跨平台的音乐播放器～
 
-[![macOS 效果预览](https://user-images.githubusercontent.com/4962134/52162110-ea439f80-2709-11e9-9558-47f015de839b.png)](https://www.bilibili.com/video/av46787694/)
+[![macOS 效果预览](https://user-images.githubusercontent.com/4962134/73344241-fa5e7280-42bc-11ea-95bf-28eac8180d0e.png)](https://www.bilibili.com/video/av46787694/)
 
 ### 特性
 
@@ -22,11 +22,14 @@ FeelUOwn 是一个符合 Unix 哲学的跨平台的音乐播放器～
 
 详细文档请看：https://feeluown.readthedocs.io/
 
+开发者/用户[交流群](https://t.me/joinchat/H7k12hG5HYsGy7RVvK_Dwg)
+
 ### 已知的一些插件
 
 除了[feeluown 组织](https://github.com/feeluown)下提供的一些插件，大家如果发现或者自己编写了一些插件，可以在下面进行补充～
 
 | 插件名 | 开发者们  | 状态 |
 | ------- | ------ | -------- |
-| [MPRIS2](https://github.com/cosven/feeluown-mpris2-plugin) | [@cosven](https://github.com/cosven) | 可用 |
 | [Discord RPC Rich Precense 服务](https://github.com/BruceZhang1993/feeluown-discordrpc-plugin) | [@BruceZhang1993](https://github.com/BruceZhang1993) | 可用 |
+| [桌面通知](https://github.com/Rapiz1/feeluown-notification-plugin)|[@Rapiz1](https://github.com/rapiz1)| 可用 |
+| [YouTube/bilibili](https://github.com/cosven/rcfiles/blob/master/youtube_provider.py)|[@cosven](https://github.com/cosven) | 能用，但需要折腾 |

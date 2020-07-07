@@ -4,7 +4,9 @@ from urllib.parse import parse_qsl, urlsplit
 
 
 class NotFound(Exception):
-    pass
+    """
+    No matched rule for path
+    """
 
 
 def match(url, rules):
@@ -30,7 +32,7 @@ def match(url, rules):
             query = dict(parse_qsl(qs))
             params = match.groupdict()
             return rule, params, query
-    raise NotFound
+    raise NotFound(f"No matched rule for {path}")
 
 
 def _validate_rule(rule):

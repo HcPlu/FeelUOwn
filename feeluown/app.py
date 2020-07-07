@@ -1,20 +1,29 @@
 import asyncio
 import logging
+import json
+import sys
 from functools import partial
 from contextlib import contextmanager
 
 from fuocore import LiveLyric, Library
 from fuocore.dispatch import Signal
-from fuocore.pubsub import run as run_pubsub
+from fuocore.models import Resolver, reverse, resolve, \
+    ResolverNotFound
+from fuocore.playlist import PlaybackMode
+from fuocore.pubsub import (
+    Gateway as PubsubGateway,
+    HandlerV1 as PubsubHandlerV1,
+)
 
-from .consts import APP_ICON
+from .consts import APP_ICON, STATE_FILE
+from .fm import FM
 from .player import Player
 from .plugin import PluginsManager
 from .server import FuoServer
 from .publishers import LiveLyricPublisher
 from .request import Request
 from .version import VersionManager
-from .fuoexec import fuoexec_after_app_attrs_attached
+from .task import TaskManager
 
 logger = logging.getLogger(__name__)
 
@@ -26,23 +35,90 @@ class App:
     GuiMode = 0x0010     # 显示 GUI
     CliMode = 0x0100     # 命令行模式
 
-    instance = None
+    def __init__(self, config):
+        self.mode = config.MODE  # DEPRECATED: use app.config.MODE instead
+        self.config = config
+        self.initialized = Signal()
+        self.about_to_shutdown = Signal()
 
-    def exec_(self, code):
-        """执行 Python 代码"""
-        obj = compile(code, '<string>', 'single')
-        self._g.update({
-            'app': self,
-            'player': self.player
-        })
-        exec(obj, self._g, self._g)
+        self.initialized.connect(lambda _: self.load_state(), weak=False)
+        self.about_to_shutdown.connect(lambda _: self.dump_state(), weak=False)
 
     def show_msg(self, msg, *args, **kwargs):
         """在程序中显示消息，一般是用来显示程序当前状态"""
+        # pylint: disable=no-self-use, unused-argument
         logger.info(msg)
 
+    def get_listen_addr(self):
+        return '0.0.0.0' if self.config.ALLOW_LAN_CONNECT else '127.0.0.1'
+
+    def load_state(self):
+        playlist = self.playlist
+        player = self.player
+
+        try:
+            with open(STATE_FILE, 'r') as f:
+                state = json.load(f)
+        except FileNotFoundError:
+            pass
+        except json.decoder.JSONDecodeError:
+            logger.exception('invalid state file')
+        else:
+            player.volume = state['volume']
+            playlist.playback_mode = PlaybackMode(state['playback_mode'])
+            songs = []
+            for song in state['playlist']:
+                try:
+                    song = resolve(song)
+                except ResolverNotFound:
+                    pass
+                else:
+                    songs.append(song)
+            playlist.init_from(songs)
+            if songs and self.mode & App.GuiMode:
+                self.browser.goto(uri='/player_playlist')
+
+            song = state['song']
+
+            def before_media_change(old_media, media):
+                if old_media is not None or playlist.current_song != song:
+                    player.media_about_to_changed.disconnect(before_media_change)
+                    player.set_play_range()
+                    player.resume()
+
+            if song is not None:
+                try:
+                    song = resolve(state['song'])
+                except ResolverNotFound:
+                    pass
+                else:
+                    player.media_about_to_changed.connect(before_media_change,
+                                                          weak=False)
+                    player.pause()
+                    player.set_play_range(start=state['position'])
+                    player.load_song(song)
+
+    def dump_state(self):
+        playlist = self.playlist
+        player = self.player
+
+        song = self.player.current_song
+        if song is not None:
+            song = reverse(song, as_line=True)
+        # TODO: dump player.media
+        state = {
+            'playback_mode': playlist.playback_mode.value,
+            'volume': player.volume,
+            'state': player.state.value,
+            'song': song,
+            'position': player.position,
+            'playlist': [reverse(song, as_line=True) for song in playlist.list()],
+        }
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f)
+
     @contextmanager
-    def create_action(self, s):
+    def create_action(self, s):  # pylint: disable=no-self-use
         """根据操作描述生成 Action (alpha)
 
         设计缘由：用户需要知道目前程序正在进行什么操作，进度怎么样，
@@ -72,16 +148,11 @@ class App:
         else:
             show_msg(s + '...done')  # done
 
-    def shutdown(self):
-        if self.mode & App.DaemonMode:
-            self.pubsub_server.close()
-        self.player.stop()
-        self.player.shutdown()
-
 
 def attach_attrs(app):
     """初始化 app 属性"""
-    app.library = Library()
+    loop = asyncio.get_event_loop()
+    app.library = Library(app.config.PROVIDERS_STANDBY)
     app.live_lyric = LiveLyric()
     player_kwargs = dict(
         audio_device=bytes(app.config.MPV_AUDIO_DEVICE, 'utf-8')
@@ -90,13 +161,18 @@ def attach_attrs(app):
     app.playlist = app.player.playlist
     app.plugin_mgr = PluginsManager(app)
     app.request = Request()
-    app._g = {}
+    app.task_mgr = TaskManager(app, loop)
+    app.fm = FM(app)
 
     if app.mode & (app.DaemonMode | app.GuiMode):
         app.version_mgr = VersionManager(app)
 
+    if app.mode & app.DaemonMode:
+        app.server = FuoServer(app)
+        app.pubsub_gateway = PubsubGateway()
+        app._ll_publisher = LiveLyricPublisher(app.pubsub_gateway)
+
     if app.mode & app.GuiMode:
-        from feeluown.widgets.collections import CollectionsModel
         from feeluown.uimodels.provider import ProviderUiManager
         from feeluown.uimodels.playlist import PlaylistUiManager
         from feeluown.uimodels.my_music import MyMusicUiManager
@@ -128,36 +204,23 @@ def attach_attrs(app):
         app.show_msg = app.ui.magicbox.show_msg
 
 
-def initialize(app):
-    loop = asyncio.get_event_loop()
-    app.player.position_changed.connect(app.live_lyric.on_position_changed)
-    app.playlist.song_changed.connect(app.live_lyric.on_song_changed)
-    app.plugin_mgr.scan()
-    if app.mode & app.DaemonMode:
-        app.server = FuoServer(app, loop=loop)
-        loop.create_task(app.server.run())
-        app.pubsub_gateway, app.pubsub_server = run_pubsub()
-        app._ll_publisher = LiveLyricPublisher(app.pubsub_gateway)
-        app.live_lyric.sentence_changed.connect(app._ll_publisher.publish)
-
-    if app.mode & App.GuiMode:
-        app.theme_mgr.autoload()
-        app.tips_mgr.show_random_tip()
-        app.coll_uimgr.initialize()
-
-    if app.mode & (App.DaemonMode | App.GuiMode):
-        loop.call_later(10, partial(loop.create_task, app.version_mgr.check_release()))
-    app.initialized.emit(app)
-
-
 def create_app(config):
-    bases = [App]
-
     mode = config.MODE
+
     if mode & App.GuiMode:
-        from PyQt5.QtCore import QSize
+
+        from PyQt5.QtCore import Qt
         from PyQt5.QtGui import QIcon, QPixmap
         from PyQt5.QtWidgets import QApplication, QWidget
+
+        from feeluown.compat import QEventLoop
+
+        q_app = QApplication(sys.argv)
+        q_app.setQuitOnLastWindowClosed(True)
+        q_app.setApplicationName('FeelUOwn')
+
+        app_event_loop = QEventLoop(q_app)
+        asyncio.set_event_loop(app_event_loop)
 
         class GuiApp(QWidget):
             mode = App.GuiMode
@@ -168,39 +231,103 @@ def create_app(config):
                 QApplication.setWindowIcon(QIcon(QPixmap(APP_ICON)))
 
             def closeEvent(self, e):
-                app.ui.mpv_widget.close()
+                self.ui.mpv_widget.close()
                 event_loop = asyncio.get_event_loop()
                 event_loop.stop()
-                # try:
-                #     self.shutdown()
-                # finally:
-                #     QApplication.quit()
 
-            def sizeHint(self):
-                return QSize(1000, 618)
+            def mouseReleaseEvent(self, e):
+                if not self.rect().contains(e.pos()):
+                    return
+                if e.button() == Qt.BackButton:
+                    self.browser.back()
+                elif e.button() == Qt.ForwardButton:
+                    self.browser.forward()
 
+        class FApp(App, GuiApp):
+            def __init__(self, config):
+                App.__init__(self, config)
+                GuiApp.__init__(self)
 
-        bases.append(GuiApp)
+    else:
+        FApp = App
 
-    if mode & App.CliMode:
-
-        class CliApp:
-            pass
-
-        bases.append(CliApp)
-
-    class FApp(*bases):
-        def __init__(self, mode):
-            for base in bases:
-                base.__init__(self)
-            self.mode = mode
-            self.initialized = Signal()
-    app = FApp(mode)
-    App.instance = app
-    app.config = config
+    Signal.setup_aio_support()
+    Resolver.setup_aio_support()
+    app = FApp(config)
     attach_attrs(app)
-    fuoexec_after_app_attrs_attached(app)
-    if app.mode & App.GuiMode:
-        app.show()
-    initialize(app)
+    Resolver.library = app.library
     return app
+
+
+def init_app(app):
+    app.player.position_changed.connect(app.live_lyric.on_position_changed)
+    app.playlist.song_changed.connect(app.live_lyric.on_song_changed, aioqueue=True)
+    if app.mode & app.DaemonMode:
+        app.live_lyric.sentence_changed.connect(app._ll_publisher.publish)
+
+    app.plugin_mgr.scan()
+    if app.mode & App.GuiMode:
+        app.theme_mgr.initialize()
+        app.tips_mgr.show_random_tip()
+        app.coll_uimgr.initialize()
+        app.browser.initialize()
+        app.show()
+
+
+def run_app(app):
+    loop = asyncio.get_event_loop()
+
+    if app.mode & (App.DaemonMode | App.GuiMode):
+        loop.call_later(10, partial(loop.create_task, app.version_mgr.check_release()))
+
+    if app.mode & App.DaemonMode:
+        if sys.platform.lower() == 'darwin':
+            try:
+                from .global_hotkey_mac import MacGlobalHotkeyManager
+            except ImportError as e:
+                logger.warning("Can't start mac hotkey listener: %s", str(e))
+            else:
+                mac_global_hotkey_mgr = MacGlobalHotkeyManager()
+                mac_global_hotkey_mgr.start()
+        if sys.platform.lower() == 'linux':
+            from feeluown.linux import run_mpris2_server
+            run_mpris2_server(app)
+
+        loop.create_task(app.server.run(app.get_listen_addr()))
+        client_connected_cb = PubsubHandlerV1(app.pubsub_gateway).handle
+        loop.create_task(asyncio.start_server(
+            client_connected_cb,
+            host=app.get_listen_addr(),
+            port=23334,
+            loop=loop))
+    try:
+        if not (app.config.MODE & (App.GuiMode | App.DaemonMode)):
+            logger.warning('Fuo running with no daemon and no window')
+        loop.run_forever()
+    except KeyboardInterrupt:
+        # NOTE: gracefully shutdown?
+        pass
+    finally:
+        _shutdown_app(app)
+        loop.stop()
+        loop.close()
+
+
+def run_app_once(app, future):
+    loop = asyncio.get_event_loop()
+
+    try:
+        loop.run_until_complete(future)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _shutdown_app(app)
+        loop.stop()
+        loop.close()
+
+
+def _shutdown_app(app):
+    app.about_to_shutdown.emit(app)
+    app.player.stop()
+    app.player.shutdown()
+    Signal.teardown_aio_support()

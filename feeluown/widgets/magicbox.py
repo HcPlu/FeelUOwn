@@ -1,9 +1,15 @@
 import io
 import sys
 
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFontDatabase
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QFontDatabase, QKeySequence
 from PyQt5.QtWidgets import QLineEdit, QSizePolicy
+
+from feeluown.fuoexec import fuoexec
+
+_KeyPrefix = 'search_'  # local storage key prefix
+KeySourceIn = _KeyPrefix + 'source_in'
+KeyType = _KeyPrefix + 'type'
 
 
 class MagicBox(QLineEdit):
@@ -12,20 +18,24 @@ class MagicBox(QLineEdit):
     ref: https://wiki.qt.io/Technical_FAQ #How can I create a one-line QTextEdit?
     """
 
+    # this filter signal is designed for table (songs_table & albums_table)
+    filter_text_changed = pyqtSignal(str)
+
     def __init__(self, app, parent=None):
         super().__init__(parent)
 
         self._app = app
-        self.setPlaceholderText('搜索歌曲、歌手、专辑、用户；执行 Python 代码')
+        self.setPlaceholderText('搜索歌曲、歌手、专辑、用户')
         self.setToolTip('直接输入文字可以进行过滤，按 Enter 可以搜索\n'
                         '输入 >>> 前缀之后，可以执行 Python 代码\n'
+                        '输入 # 前缀之后，可以过滤表格内容\n'
                         '输入 > 前缀可以执行 fuo 命令（未实现，欢迎 PR）')
         self.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setFixedHeight(28)
+        self.setFixedHeight(32)
         self.setFrame(False)
         self.setAttribute(Qt.WA_MacShowFocusRect, 0)
-        self.setStyleSheet('QLineEdit{padding-left: 5px;}')
+        self.setTextMargins(5, 0, 0, 0)
 
         self._timer = QTimer(self)
         self._cmd_text = None
@@ -35,9 +45,17 @@ class MagicBox(QLineEdit):
         self.textChanged.connect(self.__on_text_edited)
         # self.textEdited.connect(self.__on_text_edited)
         self.returnPressed.connect(self.__on_return_pressed)
-        self._app.browser.route('/search')(self.__handle_search)
 
-    def show_msg(self, text, timeout=2000):
+        self._app.hotkey_mgr.register(
+            [QKeySequence('Ctrl+F'), QKeySequence(':'), QKeySequence('Alt+x')],
+            self.setFocus
+        )
+
+    def show_msg(self, text, timeout=2000, force=False):
+        # do not show message if we has focus, since it will
+        # break the user input
+        if not force and self.hasFocus():
+            return
         if not text:
             return
         self._set_mode('msg')
@@ -66,44 +84,47 @@ class MagicBox(QLineEdit):
                 self._cmd_text = self.text()
                 self._mode = mode
 
-    def __handle_search(self, req):
-        q = req.query.get('q', '')
-        if q:
-            self._search_library(q)
-
-    def _search_library(self, q):
-        songs = []
-        for result in self._app.library.search(q):
-            songs.extend(result.songs)
-        self._app.ui.songs_table_container.show_songs(songs)
-
     def _exec_code(self, code):
         """执行代码并重定向代码的 stdout/stderr"""
         output = io.StringIO()
         sys.stderr = output
         sys.stdout = output
         try:
-            self._app.exec_(code)
+            obj = compile(code, '<string>', 'single')
+            fuoexec(obj)
         except Exception as e:
             print(str(e))
         finally:
             sys.stderr = sys.__stderr__
             sys.stdout = sys.__stdout__
-        self.show_msg(output.getvalue() or 'No output.')
+        self.show_msg(output.getvalue() or 'No output.', force=True)
 
     def __on_text_edited(self):
         text = self.text()
         if self._mode == 'cmd':
             self._cmd_text = text
-        if not text.startswith('>'):
-            self._app.ui.songs_table_container.search(text)
+        # filter browser content if prefix starts with `#`
+        # TODO: cancel unneeded filter
+        if text.startswith('#'):
+            self.filter_text_changed.emit(text[1:].strip())
+        else:
+            self.filter_text_changed.emit('')
 
     def __on_return_pressed(self):
         text = self.text()
         if text.startswith('>>> '):
             self._exec_code(text[4:])
         else:
-            self._app.browser.goto(uri='/search', query={'q': text})
+            local_storage = self._app.browser.local_storage
+            path = '/search'
+            type_ = local_storage.get(KeyType)
+            source_in = local_storage.get(KeySourceIn)
+            query = {'q': text}
+            if type_ is not None:
+                query['type'] = type_
+            if source_in is not None:
+                query['source_in'] = source_in
+            self._app.browser.goto(path=path, query=query)
 
     def __on_timeout(self):
         self._set_mode('cmd')

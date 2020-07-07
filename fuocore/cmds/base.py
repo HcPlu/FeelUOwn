@@ -1,5 +1,3 @@
-from fuocore.protocol import ModelParser
-
 cmd_handler_mapping = {}
 
 
@@ -17,12 +15,12 @@ class HandlerMeta(type):
 
 
 class AbstractHandler(metaclass=HandlerMeta):
-    def __init__(self, library, player, playlist, live_lyric):
+    def __init__(self, app, library, player, playlist, live_lyric):
+        self._app = app
         self.library = library
         self.player = player
         self.playlist = playlist
         self.live_lyric = live_lyric
-        self.model_parser = ModelParser(library)
 
     def handle(self, cmd):
         raise NotImplementedError

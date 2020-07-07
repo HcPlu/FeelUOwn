@@ -6,11 +6,13 @@ from mpv import (
     MpvEventID,
     MpvEventEndFile,
     _mpv_set_property_string,
+    _mpv_set_option_string,
+    _mpv_client_api_version,
 )
 
 from fuocore.dispatch import Signal
 from fuocore.media import Media
-from fuocore.player import AbstractPlayer, State, PlaybackMode
+from fuocore.player import AbstractPlayer, State
 
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,7 @@ class MpvPlayer(AbstractPlayer):
     player will always play playlist current song. player will listening to
     playlist ``song_changed`` signal and change the current playback.
 
-    TODO: make me singleton
+    todo: make me singleton
     """
     def __init__(self, audio_device=b'auto', winid=None, *args, **kwargs):
         super(MpvPlayer, self).__init__(*args, **kwargs)
@@ -35,16 +37,21 @@ class MpvPlayer(AbstractPlayer):
         # set log_handler if you want to debug
         # mpvkwargs['log_handler'] = self.__log_handler
         # mpvkwargs['msg_level'] = 'all=v'
-        self._mpv = MPV(ytdl=True,
+        # the default version of libmpv on Ubuntu 18.04 is (1, 25)
+        self._version = _mpv_client_api_version()
+        self._mpv = MPV(ytdl=False,
                         input_default_bindings=True,
                         input_vo_keyboard=True,
                         **mpvkwargs)
         _mpv_set_property_string(self._mpv.handle, b'audio-device', audio_device)
+        # old version libmpv(for example: (1, 20)) should set option by using
+        # _mpv_set_option_string, while newer version can use _mpv_set_property_string
+        _mpv_set_option_string(self._mpv.handle, b'user-agent',
+                               b'Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
 
-        # TODO: 之后可以考虑将这个属性加入到 AbstractPlayer 中
+        #: if video_format changes to None, there is no video available
         self.video_format_changed = Signal()
 
-    def initialize(self):
         self._mpv.observe_property(
             'time-pos',
             lambda name, position: self._on_position_changed(position)
@@ -59,89 +66,37 @@ class MpvPlayer(AbstractPlayer):
         )
         # self._mpv.register_event_callback(lambda event: self._on_event(event))
         self._mpv._event_callbacks.append(self._on_event)
-        self._playlist.song_changed.connect(self._on_song_changed)
-        self.song_finished.connect(self._on_song_finished)
-        logger.info('Player initialize finished.')
+        logger.debug('Player initialize finished.')
 
     def shutdown(self):
         self._mpv.terminate()
 
     def play(self, media, video=True):
-        # NOTE - API DESGIN: we should return None, see
-        # QMediaPlayer API reference for more details.
-
         logger.debug("Player will play: '%s'", media)
-
-        if video:
-            # FIXME: for some property, we need to set via setattr, however,
-            #  some need to be set via _mpv_set_property_string
-            self._mpv.handle.vid = b'auto'
-            # it seems that ytdl will auto choose the default format
-            #  if we set ytdl-format to ''
-            _mpv_set_property_string(self._mpv.handle, b'ytdl-format', b'')
-        else:
-            # set vid to no and ytdl-format to bestaudio/best
-            # see https://mpv.io/manual/stable/#options-vid for more details
-            self._mpv.handle.vid = b'no'
-            _mpv_set_property_string(self._mpv.handle, b'ytdl-format', b'bestaudio/best')
-
         if isinstance(media, Media):
             media = media
         else:  # media is a url
             media = Media(media)
+        self._set_http_headers(media.http_headers)
         url = media.url
 
         # Clear playlist before play next song,
         # otherwise, mpv will seek to the last position and play.
+        self.media_about_to_changed.emit(self._current_media, media)
         self._mpv.playlist_clear()
         self._mpv.play(url)
-        self._mpv.pause = False
-        self.state = State.playing
         self._current_media = media
-        # TODO: we will emit a media object
         self.media_changed.emit(media)
 
-    def prepare_media(self, song, done_cb=None):
-        if song.meta.support_multi_quality:
-            media, quality = song.select_media('hq<>')
+    def set_play_range(self, start=None, end=None):
+        if self._version >= (1, 28):
+            start_default, end_default = 'none', 'none'
         else:
-            media = song.url
-        media = Media(media) if media else None
-        if done_cb is not None:
-            done_cb(media)
-        return media
-
-    def play_song(self, song):
-        """播放指定歌曲
-
-        如果目标歌曲与当前歌曲不相同，则修改播放列表当前歌曲，
-        播放列表会发出 song_changed 信号，player 监听到信号后调用 play 方法，
-        到那时才会真正的播放新的歌曲。如果和当前播放歌曲相同，则忽略。
-
-        .. note::
-
-            调用方不应该直接调用 playlist.current_song = song 来切换歌曲
-        """
-        if song is not None and song == self.current_song:
-            logger.warning('The song is already under playing.')
-        else:
-            self._playlist.current_song = song
-
-    def play_next(self):
-        """播放下一首歌曲
-
-        .. note::
-
-            这里不能使用 ``play_song(playlist.next_song)`` 方法来切换歌曲，
-            ``play_song`` 和 ``playlist.current_song = song`` 是有区别的。
-        """
-        self.playlist.current_song = self.playlist.next_song
-
-    def play_previous(self):
-        self.playlist.current_song = self.playlist.previous_song
-
-    def replay(self):
-        self.playlist.current_song = self.current_song
+            start_default, end_default = '0%', '100%'
+        start = str(start) if start is not None else start_default
+        end = str(end) if end is not None else end_default
+        _mpv_set_option_string(self._mpv.handle, b'start', bytes(start, 'utf-8'))
+        _mpv_set_option_string(self._mpv.handle, b'end', bytes(end, 'utf-8'))
 
     def resume(self):
         self._mpv.pause = False
@@ -171,8 +126,11 @@ class MpvPlayer(AbstractPlayer):
 
     @position.setter
     def position(self, position):
-        self._mpv.seek(position, reference='absolute')
-        self._position = position
+        if self._current_media:
+            self._mpv.seek(position, reference='absolute')
+            self._position = position
+        else:
+            logger.warn("can't set position when current media is empty")
 
     @AbstractPlayer.volume.setter
     def volume(self, value):
@@ -181,7 +139,7 @@ class MpvPlayer(AbstractPlayer):
 
     @property
     def video_format(self):
-        self._video_format
+        return self._video_format
 
     @video_format.setter
     def video_format(self, vformat):
@@ -200,36 +158,26 @@ class MpvPlayer(AbstractPlayer):
     def _on_video_format_changed(self, vformat):
         self.video_format = vformat
 
-    def _on_song_changed(self, song):
-        """播放列表 current_song 发生变化后的回调
-
-        判断变化后的歌曲是否有效的，有效则播放，否则将它标记为无效歌曲。
-        如果变化后的歌曲是 None，则停止播放。
-        """
-        def prepare_callback(media):
-            if media is not None:
-                self.play(media)
-            else:
-                self._playlist.mark_as_bad(song)
-                self.play_next()
-
-        if song is not None:
-            self.prepare_media(song, done_cb=prepare_callback)
-        else:
-            self.stop()
-
     def _on_event(self, event):
         if event['event_id'] == MpvEventID.END_FILE:
             reason = event['event']['reason']
             logger.debug('Current song finished. reason: %d' % reason)
             if self.state != State.stopped and reason != MpvEventEndFile.ABORTED:
-                self.song_finished.emit()
+                self.media_finished.emit()
 
-    def _on_song_finished(self):
-        if self._playlist.playback_mode == PlaybackMode.one_loop:
-            self.replay()
+    def _set_http_headers(self, http_headers):
+        if http_headers:
+            headers = []
+            for key, value in http_headers.items():
+                headers.append("{}: {}".format(key, value))
+            headers_text = ','.join(headers)
+            headers_bytes = bytes(headers_text, 'utf-8')
+            logger.info('play media with headers: %s', headers_text)
+            _mpv_set_option_string(self._mpv.handle, b'http-header-fields',
+                                   headers_bytes)
         else:
-            self.play_next()
+            _mpv_set_option_string(self._mpv.handle, b'http-header-fields',
+                                   b'')
 
     def __log_handler(self, loglevel, component, message):
         print('[{}] {}: {}'.format(loglevel, component, message))

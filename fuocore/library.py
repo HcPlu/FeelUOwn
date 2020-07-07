@@ -1,9 +1,21 @@
 import logging
+from functools import partial
 
 from fuocore import aio
+from fuocore.dispatch import Signal
+from fuocore.models import SearchType
+from fuocore.provider import AbstractProvider
 from fuocore.utils import log_exectime
 
 logger = logging.getLogger(__name__)
+
+
+class ProviderAlreadyExists(Exception):
+    pass
+
+
+class ProviderNotFound(Exception):
+    pass
 
 
 def _sort_song_standby(song, standby_list):
@@ -44,18 +56,49 @@ def _extract_and_sort_song_standby_list(song, result_g):
     return sorted_standby_list
 
 
-class Library(object):
+class Library:
     """音乐库，管理资源提供方以及资源"""
-    def __init__(self):
+    def __init__(self, providers_standby=None):
+        """
+
+        :type app: feeluown.app.App
+        """
+        self._providers_standby = providers_standby
         self._providers = set()
 
+        self.provider_added = Signal()  # emit(AbstractProvider)
+        self.provider_removed = Signal()  # emit(AbstractProvider)
+
     def register(self, provider):
-        """注册资源提供方"""
+        """register provider
+
+        :raises ProviderAlreadyExists:
+        :raises ValueError:
+
+        >>> from fuocore.provider import dummy_provider
+        >>> library = Library(None)
+        >>> library.register(dummy_provider)
+        >>> library.register(dummy_provider)
+        Traceback (most recent call last):
+            ...
+        fuocore.library.ProviderAlreadyExists
+        """
+        if not isinstance(provider, AbstractProvider):
+            raise ValueError('invalid provider instance')
+        for _provider in self._providers:
+            if _provider.identifier == provider.identifier:
+                raise ProviderAlreadyExists
         self._providers.add(provider)
+        self.provider_added.emit(provider)
 
     def deregister(self, provider):
-        """反注册资源提供方"""
-        self._providers.remove(provider)
+        """deregister provider"""
+        try:
+            self._providers.remove(provider)
+        except ValueError:
+            raise ProviderNotFound from None
+        else:
+            self.provider_removed.emit(provider)
 
     def get(self, identifier):
         """通过资源提供方唯一标识获取提供方实例"""
@@ -73,42 +116,56 @@ class Library(object):
             return iter(self._providers)
         return filter(lambda p: p.identifier in identifier_in, self.list())
 
-    def search(self, keyword, source_in=None, **kwargs):
-        """search song/artist/album by keyword
+    def search(self, keyword, type_in=None, source_in=None, **kwargs):
+        """search song/artist/album/playlist by keyword
 
-        - TODO: support search album or artist
-        - TODO: support search with filters(by artist or by source)
+        please use a_search method if you can.
 
         :param keyword: search keyword
-        :param source_id: None or provider identifier list
-        """
-        for provider in self._filter(identifier_in=source_in):
-            try:
-                result = provider.search(keyword=keyword)
-            except Exception as e:
-                logger.exception(str(e))
-                logger.error('Search %s in %s failed.' % (keyword, provider))
-            else:
-                yield result
+        :param type_in: search type
+        :param source_in: None or provider identifier list
 
-    async def a_search(self, keyword, source_in=None, timeout=None, **kwargs):
+        - TODO: support search with filters(by artist or by source)
+        """
+        type_in = SearchType.batch_parse(type_in) if type_in else [SearchType.so]
+        for provider in self._filter(identifier_in=source_in):
+            for type_ in type_in:
+                try:
+                    result = provider.search(keyword=keyword, type_=type_, **kwargs)
+                except Exception:  # pylint: disable=broad-except
+                    logger.exception('Search %s in %s failed.', keyword, provider)
+                else:
+                    if result is not None:
+                        yield result
+
+    async def a_search(self, keyword, source_in=None, timeout=None,
+                       type_in=None,
+                       **kwargs):
         """async version of search
 
         TODO: add Happy Eyeballs requesting strategy if needed
         """
+        type_in = SearchType.batch_parse(type_in) if type_in else [SearchType.so]
+
         fs = []  # future list
         for provider in self._filter(identifier_in=source_in):
-            future = aio.run_in_executor(None, provider.search, keyword)
-            fs.append(future)
-        result = []
+            for type_ in type_in:
+                future = aio.run_in_executor(
+                    None,
+                    partial(provider.search, keyword, type_=type_))
+                fs.append(future)
 
+        results = []
         # TODO: use async generator when we only support Python 3.6 or above
         for future in aio.as_completed(fs, timeout=timeout):
             try:
-                result.append(await future)
+                result = await future
             except Exception as e:
                 logger.exception(str(e))
-        return result
+            else:
+                if result is not None:
+                    results.append(result)
+        return results
 
     @log_exectime
     def list_song_standby(self, song, onlyone=True):
@@ -142,10 +199,11 @@ class Library(object):
     async def a_list_song_standby(self, song, onlyone=True):
         """async version of list_song_standby
         """
-        valid_sources = [pvd.identifier for pvd in self.list()
-                         if pvd.identifier != song.source]
-        q = '{} {}'.format(song.title, song.artists_name)
-        result_g = await self.a_search(q, source_in=valid_sources)
+        providers = self._providers_standby or [pvd.identifier for pvd in self.list()]
+        valid_providers = [provider for provider in providers
+                           if provider != song.source]
+        q = '{} {}'.format(song.title_display, song.artists_name_display)
+        result_g = await self.a_search(q, source_in=valid_providers)
         sorted_standby_list = _extract_and_sort_song_standby_list(song, result_g)
         # choose one or two valid standby
         result = []

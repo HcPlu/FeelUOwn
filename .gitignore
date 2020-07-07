@@ -10,6 +10,7 @@
 *.pyc
 *.swp
 *.swo
+*.whl
 
 *.desktop
 *.md~
@@ -73,3 +74,6 @@ feeluown.egg-info/
 .pytest_cache/
 *.dat
 htmlcov/
+
+# vscode
+.vscode/

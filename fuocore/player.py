@@ -1,10 +1,16 @@
+import logging
 from abc import ABCMeta, abstractmethod
 from enum import IntEnum
-import logging
-import random
 
 from fuocore.dispatch import Signal
+# some may import `Playlist` and `PlaybackMode` from player module
+from fuocore.playlist import PlaybackMode, Playlist
 
+__all__ = ('Playlist',
+           'MpvPlayer',
+           'AbstractPlayer',
+           'PlaybackMode',
+           'State',)
 
 logger = logging.getLogger(__name__)
 
@@ -17,222 +23,6 @@ class State(IntEnum):
     #: 处于 paused 状态时，current_song 也可能为 False
     paused = 1
     playing = 2
-
-
-class PlaybackMode(IntEnum):
-    """
-    Playlist playback mode.
-    """
-    one_loop = 0  #: One Loop
-    sequential = 1  #: Sequential
-    loop = 2  #: Loop
-    random = 3  #: Random
-
-
-class Playlist(object):
-    """player playlist provide a list of song model to play
-    """
-
-    def __init__(self, songs=None, playback_mode=PlaybackMode.loop):
-        """
-        :param songs: list of :class:`fuocore.models.SongModel`
-        :param playback_mode: :class:`fuocore.player.PlaybackMode`
-        """
-        #: store value for ``current_song`` property
-        self._current_song = None
-
-        #: songs whose url is invalid
-        self._bad_songs = []
-
-        #: store value for ``songs`` property
-        self._songs = songs or []
-
-        #: store value for ``playback_mode`` property
-        self._playback_mode = playback_mode
-
-        #: playback mode changed signal
-        self.playback_mode_changed = Signal()
-        self.song_changed = Signal()
-        """current song changed signal
-
-        The player will play the song after it receive the signal,
-        when song is None, the player will stop playback.
-        """
-
-    def __len__(self):
-        return len(self._songs)
-
-    def __getitem__(self, index):
-        """overload [] operator"""
-        return self._songs[index]
-
-    def mark_as_bad(self, song):
-        if song in self._songs and song not in self._bad_songs:
-            self._bad_songs.append(song)
-
-    def add(self, song):
-        """往播放列表末尾添加一首歌曲"""
-        if song in self._songs:
-            return
-        self._songs.append(song)
-        logger.debug('Add %s to player playlist', song)
-
-    def insert(self, song):
-        """在当前歌曲后插入一首歌曲"""
-        if song in self._songs:
-            return
-        if self._current_song is None:
-            self._songs.append(song)
-        else:
-            index = self._songs.index(self._current_song)
-            self._songs.insert(index + 1, song)
-
-    def remove(self, song):
-        """Remove song from playlist. O(n)
-
-        If song is current song, remove the song and play next. Otherwise,
-        just remove it.
-        """
-        if song in self._songs:
-            if self._current_song is None:
-                self._songs.remove(song)
-            elif song == self._current_song:
-                next_song = self.next_song
-                # 随机模式下或者歌单只剩一首歌曲，下一首可能和当前歌曲相同
-                if next_song == self.current_song:
-                    self.current_song = None
-                    self._songs.remove(song)
-                    self.current_song = self.next_song
-                else:
-                    self.current_song = self.next_song
-                    self._songs.remove(song)
-            else:
-                self._songs.remove(song)
-            logger.debug('Remove {} from player playlist'.format(song))
-        else:
-            logger.debug('Remove failed: {} not in playlist'.format(song))
-
-        if song in self._bad_songs:
-            self._bad_songs.remove(song)
-
-    def clear(self):
-        """remove all songs from playlists"""
-
-        self.current_song = None
-        self._songs.clear()
-        self._bad_songs.clear()
-
-    def list(self):
-        """get all songs in playlists"""
-        return self._songs
-
-    @property
-    def current_song(self):
-        """
-        current playing song, return None if there is no current song
-        """
-        return self._current_song
-
-    @current_song.setter
-    def current_song(self, song):
-        """设置当前歌曲，将歌曲加入到播放列表，并发出 song_changed 信号
-
-        .. note::
-
-            该方法理论上只应该被 Player 对象调用。
-        """
-        self._last_song = self.current_song
-        if song is None:
-            self._current_song = None
-        # add it to playlist if song not in playlist
-        elif song in self._songs:
-            self._current_song = song
-        else:
-            self.insert(song)
-            self._current_song = song
-        self.song_changed.emit(song)
-
-    @property
-    def playback_mode(self):
-        return self._playback_mode
-
-    @playback_mode.setter
-    def playback_mode(self, playback_mode):
-        self._playback_mode = playback_mode
-        self.playback_mode_changed.emit(playback_mode)
-
-    def _get_good_song(self, base=0, random_=False, direction=1):
-        """从播放列表中获取一首可以播放的歌曲
-
-        :param base: base index
-        :param random: random strategy or not
-        :param direction: forward if > 0 else backword
-
-        >>> pl = Playlist([1, 2, 3])
-        >>> pl._get_good_song()
-        1
-        >>> pl._get_good_song(base=1)
-        2
-        >>> pl._bad_songs = [2]
-        >>> pl._get_good_song(base=1, direction=-1)
-        1
-        >>> pl._get_good_song(base=1)
-        3
-        >>> pl._bad_songs = [1, 2, 3]
-        >>> pl._get_good_song()
-        """
-        if not self._songs or len(self._songs) <= len(self._bad_songs):
-            logger.debug('No good song in playlist.')
-            return None
-
-        good_songs = []
-        if direction > 0:
-            song_list = self._songs[base:] + self._songs[0:base]
-        else:
-            song_list = self._songs[base::-1] + self._songs[:base:-1]
-        for song in song_list:
-            if song not in self._bad_songs:
-                good_songs.append(song)
-        if random_:
-            return random.choice(good_songs)
-        else:
-            return good_songs[0]
-
-    @property
-    def next_song(self):
-        """next song for player, calculated based on playback_mode"""
-        # 如果没有正在播放的歌曲，找列表里面第一首能播放的
-        if self.current_song is None:
-            return self._get_good_song()
-
-        if self.playback_mode == PlaybackMode.random:
-            next_song = self._get_good_song(random_=True)
-        else:
-            current_index = self._songs.index(self.current_song)
-            if current_index == len(self._songs) - 1:
-                if self.playback_mode in (PlaybackMode.loop, PlaybackMode.one_loop):
-                    next_song = self._get_good_song()
-                elif self.playback_mode == PlaybackMode.sequential:
-                    next_song = None
-            else:
-                next_song = self._get_good_song(base=current_index+1)
-        return next_song
-
-    @property
-    def previous_song(self):
-        """previous song for player to play
-
-        NOTE: not the last played song
-        """
-        if self.current_song is None:
-            return self._get_good_song(base=-1, direction=-1)
-
-        if self.playback_mode == PlaybackMode.random:
-            previous_song = self._get_good_song(direction=-1)
-        else:
-            current_index = self._songs.index(self.current_song)
-            previous_song = self._get_good_song(base=current_index - 1, direction=-1)
-        return previous_song
 
 
 class AbstractPlayer(metaclass=ABCMeta):
@@ -253,20 +43,28 @@ class AbstractPlayer(metaclass=ABCMeta):
         #: player state changed signal
         self.state_changed = Signal()
 
-        #: current song finished signal
-        self.song_finished = Signal()
+        #: current media finished signal
+        self.media_finished = Signal()
 
         #: duration changed signal
         self.duration_changed = Signal()
 
+        #: media about to change: (old_media, media)
+        self.media_about_to_changed = Signal()
         #: media changed signal
         self.media_changed = Signal()
+
+        #: volume changed signal: (int)
+        self.volume_changed = Signal()
+
+        self._playlist.song_changed_v2.connect(self._on_song_changed)
+        self.media_finished.connect(self._on_media_finished)
 
     @property
     def state(self):
         """Player state
 
-        :return: :class:`.State`
+        :rtype: State
         """
         return self._state
 
@@ -315,6 +113,7 @@ class AbstractPlayer(metaclass=ABCMeta):
         value = 0 if value < 0 else value
         value = 100 if value > 100 else value
         self._volume = value
+        self.volume_changed.emit(value)
 
     @property
     def duration(self):
@@ -337,24 +136,33 @@ class AbstractPlayer(metaclass=ABCMeta):
         """
 
     @abstractmethod
-    def prepare_media(self, song, done_cb=None):
-        """prepare media data
+    def set_play_range(self, start=None, end=None):
+        pass
 
-        In practice, we usually need to perform some web requests to extract
-        media data from song object, which may block the whole thread.
-        We can override this method to make the request action non-blocking,
-        when the action finishes, invoke done callback.
+    def load_song(self, song):
+        """加载歌曲
 
-        :param song: SongModel instance
-        :param done_cb: prepare done callback
+        如果目标歌曲与当前歌曲不相同，则修改播放列表当前歌曲，
+        播放列表会发出 song_changed 信号，player 监听到信号后调用 play 方法，
+        到那时才会真正的播放新的歌曲。如果和当前播放歌曲相同，则忽略。
+
+        .. note::
+
+            调用方不应该直接调用 playlist.current_song = song 来切换歌曲
         """
+        if song is not None and song != self.current_song:
+            self._playlist.current_song = song
 
-    @abstractmethod
     def play_song(self, song):
-        """play media by song model
+        """加载并播放指定歌曲"""
+        self.load_song(song)
+        self.resume()
 
-        :param song: :class:`fuocore.models.SongModel`
-        """
+    def play_songs(self, songs):
+        """(alpha) play list of songs"""
+        self.playlist.init_from(songs)
+        self.playlist.next()
+        self.resume()
 
     @abstractmethod
     def resume(self):
@@ -373,13 +181,30 @@ class AbstractPlayer(metaclass=ABCMeta):
         """stop player"""
 
     @abstractmethod
-    def initialize(self):
-        """"initialize player"""
-
-    @abstractmethod
     def shutdown(self):
         """shutdown player, do some clean up here"""
 
+    def _on_song_changed(self, song, media):
+        """播放列表 current_song 发生变化后的回调
+
+        判断变化后的歌曲是否有效的，有效则播放，否则将它标记为无效歌曲。
+        如果变化后的歌曲是 None，则停止播放。
+        """
+        if song is not None:
+            if media is None:
+                self._playlist.mark_as_bad(song)
+                self._playlist.next()
+            else:
+                self.play(media)
+        else:
+            self.stop()
+
+    def _on_media_finished(self):
+        if self._playlist.playback_mode == PlaybackMode.one_loop:
+            self.playlist.current_song = self.playlist.current_song
+        else:
+            self._playlist.next()
+
 
 # FIXME: remove this when no one import MpvPlayer from here
-from fuocore.mpvplayer import MpvPlayer  # noqa: F841, F401
+from fuocore.mpvplayer import MpvPlayer  # noqa: F841, F401, E402

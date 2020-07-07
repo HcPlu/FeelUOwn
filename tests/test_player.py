@@ -2,17 +2,21 @@ import os
 import time
 from unittest import TestCase, skipIf, mock
 
+from fuocore.media import Media
 from fuocore.player import MpvPlayer, Playlist, PlaybackMode, State
-from .helpers import is_travis_env
+from .helpers import cannot_play_audio
 
 
 MP3_URL = os.path.join(os.path.dirname(__file__),
-                       '../data/sample.mp3')
+                       '../data/test.m4a')
 MPV_SLEEP_SECOND = 0.1  # 留给 MPV 反应的时间
 
 
 class FakeSongModel:  # pylint: disable=all
-    pass
+    class meta:
+        support_multi_quality = False
+
+    url = ''
 
 
 class Meta:
@@ -22,6 +26,7 @@ class Meta:
 class FakeValidSongModel:
     meta = Meta
     url = MP3_URL
+
     def select_media(self, _):
         return MP3_URL, _
 
@@ -31,41 +36,30 @@ class TestPlayer(TestCase):
     def setUp(self):
         self.player = MpvPlayer()
         self.player.volume = 0
-        self.player.initialize()
 
     def tearDown(self):
         self.player.stop()
         self.player.shutdown()
 
-    @skipIf(is_travis_env, '')
+    @skipIf(cannot_play_audio, '')
     def test_play(self):
         self.player.play(MP3_URL)
         self.player.stop()
 
-    @skipIf(os.environ.get('TEST_ENV') == 'travis', '')
+    @skipIf(cannot_play_audio, '')
     def test_duration(self):
         # This may failed?
         self.player.play(MP3_URL)
         time.sleep(MPV_SLEEP_SECOND)
         self.assertIsNotNone(self.player.duration)
 
-    @skipIf(os.environ.get('TEST_ENV') == 'travis', '')
+    @skipIf(cannot_play_audio, '')
     def test_seek(self):
         self.player.play(MP3_URL)
         time.sleep(MPV_SLEEP_SECOND)
         self.player.position = 100
 
-    @skipIf(os.environ.get('TEST_ENV') == 'travis', '')
-    def test_replay(self):
-        song = FakeValidSongModel()
-        self.player.play_song(song)
-        time.sleep(MPV_SLEEP_SECOND)
-        self.player.position = 100
-        self.player.replay()
-        time.sleep(MPV_SLEEP_SECOND)
-        self.assertTrue(self.player.position < 10)
-
-    @skipIf(os.environ.get('TEST_ENV') == 'travis', '')
+    @skipIf(cannot_play_audio, '')
     def test_play_pause_toggle_resume_stop(self):
         self.player.play(MP3_URL)
         time.sleep(MPV_SLEEP_SECOND)
@@ -78,10 +72,20 @@ class TestPlayer(TestCase):
         self.player.stop()
         self.assertEqual(self.player.state, State.stopped)
 
-    @skipIf(os.environ.get('TEST_ENV') == 'travis', '')
+    @skipIf(cannot_play_audio, '')
     def test_set_volume(self):
+        cb = mock.Mock()
+        self.player.volume_changed.connect(cb)
         self.player.volume = 30
         self.assertEqual(self.player.volume, 30)
+        cb.assert_called_once_with(30)
+
+    @mock.patch('fuocore.mpvplayer._mpv_set_option_string')
+    def test_play_media_with_http_headers(self, mock_set_option_string):
+        media = Media('http://xxx', http_headers={'referer': 'http://xxx'})
+        self.player.play(media)
+        assert mock_set_option_string.called
+        self.player.stop()
 
 
 class TestPlaylist(TestCase):
@@ -167,7 +171,6 @@ class TestPlayerAndPlaylist(TestCase):
 
     def setUp(self):
         self.player = MpvPlayer()
-        self.player.initialize()
 
     def tearDown(self):
         self.player.stop()
@@ -184,13 +187,13 @@ class TestPlayerAndPlaylist(TestCase):
         playlist.add(s2)
 
         self.player.play_song(s1)
-        self.player.play_next()
+        playlist.next()
         self.assertTrue(playlist.current_song, s2)
 
-        self.player.play_previous()
+        playlist.previous()
         self.assertTrue(playlist.current_song, s1)
 
-    @skipIf(os.environ.get('TEST_ENV') == 'travis', '')
+    @skipIf(cannot_play_audio, '')
     @mock.patch.object(MpvPlayer, 'play')
     def test_remove_current_song_2(self, mock_play):
         """当播放列表只有一首歌时，移除它"""

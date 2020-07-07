@@ -3,12 +3,11 @@
 import asyncio
 import logging
 import threading
-from functools import partial
+from enum import IntEnum
 
-from fuocore import aio
-from fuocore.media import Media
 from fuocore.player import MpvPlayer, Playlist as _Playlist
-
+from fuocore.playlist import PlaybackMode
+from fuocore.dispatch import Signal
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +17,39 @@ def call_soon(func, loop):
         func()
     else:
         loop.call_soon_threadsafe(func)
+
+
+class PlaylistMode(IntEnum):
+    """playlist mode
+
+    **What is FM mode?**
+
+    In FM mode, playlist's playback_mode is unchangable, it will
+    always be sequential. When playlist has no more song,
+    the playlist hopes someone(we call it ``FMPlaylist`` here) will:
+    1. catch the ``eof_reached`` signal
+    2. add news songs to playlist by using ``fm_add`` method
+    3. call ``next`` method to resume the player
+
+    **How to enter FM mode?**
+
+    Only FMPlaylist can(should) make playlist enter FM mode, it should
+    do following things:
+    1. clear the playlist
+    2. change playlist mode to FM
+    3. add several songs to playlist
+    4. resume the player with the first song
+
+    **When will playlist exit FM mode?**
+
+    If user manually play a song, playlist will exit FM mode, at the
+    same time, playlist will:
+    1. clear itself
+    2. change to normal mode
+    3. set current song to the song
+    """
+    normal = 0  #: Normal
+    fm = 1  #: FM mode
 
 
 class Playlist(_Playlist):
@@ -33,68 +65,125 @@ class Playlist(_Playlist):
         #: find-song-standby task
         self._task = None
 
+        #: init playlist mode normal
+        self._mode = PlaylistMode.normal
+
+        #: playlist eof signal
+        # playlist have no enough songs
+        self.eof_reached = Signal()
+
+        #: playlist mode changed signal
+        self.mode_changed = Signal()
+
+    def add(self, song):
+        """add song to playlist
+
+        Theoretically, when playlist is in FM mode, we should not
+        change songs list manually(without ``fm_add`` method). However,
+        when it happens, we exit FM mode.
+        """
+        if self._mode is PlaylistMode.fm:
+            self.mode = PlaylistMode.normal
+        super().add(song)
+
+    def insert(self, song):
+        """insert song into playlist"""
+        if self._mode is PlaylistMode.fm:
+            self.mode = PlaylistMode.normal
+        super().insert(song)
+
+    def fm_add(self, song):
+        super().add(song)
+
     @_Playlist.current_song.setter
     def current_song(self, song):
-        """如果歌曲 url 无效，则尝试从其它平台找一个替代品"""
-        if song is None or \
-           (song.meta.support_multi_quality and song.list_quality()) or \
-           song.url:
-            _Playlist.current_song.fset(self, song)
+        """if song has not valid media, we find a replacement in other providers"""
+
+        if song is None:
+            self._set_current_song(None, None)
             return
+
+        if self.mode is PlaylistMode.fm and song not in self._songs:
+            self.mode = PlaylistMode.normal
+
+        task_spec = self._app.task_mgr.get_or_create('set-current-song')
+        task_spec.bind_coro(self.a_set_current_song(song))
+
+    async def a_set_current_song(self, song):
+        task_spec = self._app.task_mgr.get_or_create('prepare-media')
+        future = task_spec.bind_blocking_io(self.prepare_media, song)
+        try:
+            media = await future
+        except:  # noqa
+            logger.exception('prepare media failed')
+            self.next()
+            return
+        if media is not None:
+            self._set_current_song(song, media)
+            return
+        logger.info('song:{} media is None, mark as bad')
         self.mark_as_bad(song)
 
-        logger.info('song:%s is invalid, try to get standby', song)
-        if self._task is not None:
-            logger.info('try to cancel another find-song-standby task')
-            self._task.cancel()
-            self._task = None
+        # if mode is fm mode, do not find standby song,
+        # just skip the song
+        if self.mode is not PlaylistMode.fm:
+            self._app.show_msg('{} is invalid, try to find standby'
+                               .format(str(song)))
 
-        def _current_song_setter(task):
-            nonlocal song
-            try:
-                songs = task.result()
-            except asyncio.CancelledError:
-                logger.debug('badsong-autoreplace task is cancelled')
+            songs = await self._app.library.a_list_song_standby(song)
+            if songs:
+                final_song = songs[0]
+                logger.info('find song standby success: %s', final_song)
             else:
-                if songs:
-                    # DOUBT: how Python closures works?
-                    song = songs[0]
-                _Playlist.current_song.fset(self, song)
-            finally:
-                self._task = None
+                logger.info('find song standby failed: not found')
+                final_song = song
+            self._set_current_song(final_song, final_song.url)
+        else:
+            self.next()
 
-        def fetch_in_bg():
-            self._task = aio.create_task(self._app.library.a_list_song_standby(song))
-            self._task.add_done_callback(_current_song_setter)
+    @_Playlist.playback_mode.setter
+    def playback_mode(self, playback_mode):
+        if self._mode is PlaylistMode.fm:
+            if playback_mode is not PlaybackMode.sequential:
+                logger.warning("can't set playback mode to others in fm mode")
+            else:
+                _Playlist.playback_mode.__set__(self, PlaybackMode.sequential)
+        else:
+            _Playlist.playback_mode.__set__(self, playback_mode)
 
-        call_soon(fetch_in_bg, self._loop)
+    @property
+    def mode(self):
+        return self._mode
+
+    @mode.setter
+    def mode(self, mode):
+        """set playlist mode"""
+        if self._mode is not mode:
+            if mode is PlaylistMode.fm:
+                self.playback_mode = PlaybackMode.sequential
+            self.clear()
+            # we should change _mode at the very end
+            self._mode = mode
+            self.mode_changed.emit(mode)
+            logger.info('playlist mode changed to %s', mode)
+
+    def next(self):
+        if self.next_song is None:
+            self.eof_reached.emit()
+        else:
+            super().next()
 
 
 class Player(MpvPlayer):
 
     def __init__(self, app, *args, **kwargs):
-        super().__init__(playlist=Playlist(app), *args, **kwargs)
+        playlist = Playlist(
+            app,
+            audio_select_policy=app.config.AUDIO_SELECT_POLICY)
+        super().__init__(playlist=playlist, *args, **kwargs)
         self._app = app
-        self._loop = asyncio.get_event_loop()
-        self.initialize()
 
-    def prepare_media(self, song, done_cb=None):
-        def callback(future):
-            try:
-                media, quality = future.result()
-            except Exception as e:
-                logger.exception('prepare media data failed')
-            else:
-                media = Media(media) if media else None
-                done_cb(media)
-
-        if song.meta.support_multi_quality:
-            fetch = partial(song.select_media, self._app.config.AUDIO_SELECT_POLICY)
-        else:
-            fetch = lambda: (song.url, None)
-
-        def fetch_in_bg():
-            future = self._loop.run_in_executor(None, fetch)
-            future.add_done_callback(callback)
-
-        call_soon(fetch_in_bg, self._loop)
+    def play(self, url, video=True, **kwargs):
+        if not (self._app.mode & self._app.GuiMode):
+            video = False
+        super().play(url, video, **kwargs)

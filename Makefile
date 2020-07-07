@@ -6,12 +6,15 @@ docs:
 	cd docs && make html
 
 lint:
-	flake8 fuocore/
+	flake8 fuocore/ feeluown/ tests/
 
 unittest: pytest
 
 pytest:
-	pytest
+	TEST_ENV=travis pytest
+
+integration_test:
+	./integration-tests/run.py
 
 test: lint unittest
 

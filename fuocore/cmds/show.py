@@ -9,15 +9,16 @@ fuocore.cmds.show
     show fuo://local/songs/1  # 显示一首歌的详细信息
 """
 import logging
+from functools import wraps
 from urllib.parse import urlparse
 
-from fuocore.router import Router
+from fuocore.utils import to_readall_reader
+from fuocore.router import Router, NotFound
+from fuocore.models.uri import NS_TYPE_MAP, TYPE_NS_MAP
+from fuocore.models import ModelType
 
 from .base import AbstractHandler
-from .helpers import (
-    show_song, show_artist, show_album, show_user,
-    show_playlist
-)
+from .excs import CmdException
 
 logger = logging.getLogger(__name__)
 
@@ -37,57 +38,79 @@ class ShowHandler(AbstractHandler):
         r = urlparse(furi)
         path = '/{}{}'.format(r.netloc, r.path)
         logger.debug('请求 path: {}'.format(path))
-        rv = router.dispatch(path, {'library': self.library})
+        try:
+            rv = router.dispatch(path, {'library': self.library})
+        except NotFound:
+            raise CmdException(f'path {path} not found')
         return rv
+
+
+def get_model_or_raise(provider, model_type, model_id):
+    ns = TYPE_NS_MAP[model_type]
+    model_cls = provider.get_model_cls(model_type)
+    model = model_cls.get(model_id)
+    if model is None:
+        raise CmdException(
+            f'{ns}:{model_id} not found in provider:{provider.identifier}')
+    return model
+
+
+def use_provider(func):
+    @wraps(func)
+    def wrapper(req, **kwargs):
+        provider_id = kwargs.pop('provider')
+        provider = req.ctx['library'].get(provider_id)
+        if provider is None:
+            raise CmdException(f'provider:{provider_id} not found')
+        return func(req, provider, **kwargs)
+    return wrapper
+
+
+def create_model_handler(ns, model_type):
+    @route(f'/<provider>/{ns}/<model_id>')
+    @use_provider
+    def handle(req, provider, model_id):
+        # special cases:
+        # fuo://<provider>/users/me -> show current logged user
+        if model_type == ModelType.user:
+            if model_id == 'me':
+                user = getattr(provider, '_user', None)
+                if user is None:
+                    raise CmdException(
+                        f'log in provider:{provider.identifier} first')
+                return user
+        model = get_model_or_raise(provider, model_type, model_id)
+        return model
 
 
 @route('/')
 def list_providers(req):
-    provider_names = (provider.name for provider in
-                      req.ctx['library'].list())
-    return '\n'.join(('fuo://' + name for name in provider_names))
+    return req.ctx['library'].list()
 
 
-@route('/<provider>/songs/<sid>')
-def song_detail(req, provider, sid):
-    provider = req.ctx['library'].get(provider)
-    song = provider.Song.get(sid)
-    if song is not None:
-        return show_song(song)
+for ns, model_type in NS_TYPE_MAP.items():
+    create_model_handler(ns, model_type)
 
 
 @route('/<provider>/songs/<sid>/lyric')
+@use_provider
 def lyric(req, provider, sid):
-    provider = req.ctx['library'].get(provider)
-    song = provider.Song.get(sid)
-    if song.lyric:
+    song = get_model_or_raise(provider, ModelType.song, sid)
+    if song.lyric is not None:
         return song.lyric.content
     return ''
 
 
-@route('/<provider>/artists/<aid>')
-def artist_detail(req, provider, aid):
-    provider = req.ctx['library'].get(provider)
-    artist = provider.Artist.get(aid)
-    return show_artist(artist)
+@route('/<provider>/playlists/<pid>/songs')
+@use_provider
+def playlist_songs(req, provider, pid):
+    playlist = get_model_or_raise(provider, ModelType.playlist, pid)
+    return to_readall_reader(playlist, 'songs').readall()
 
 
-@route('/<provider>/albums/<bid>')
-def album_detail(req, provider, bid):
-    provider = req.ctx['library'].get(provider)
-    album = provider.Album.get(bid)
-    return show_album(album)
-
-
-@route('/<provider>/users/<uid>')
-def user_detail(req, provider, uid):
-    provider = req.ctx['library'].get(provider)
-    user = provider.User.get(uid)
-    return show_user(user)
-
-
-@route('/<provider>/playlists/<pid>')
-def playlist_detail(req, provider, pid):
-    provider = req.ctx['library'].get(provider)
-    playlist = provider.Playlist.get(pid)
-    return show_playlist(playlist)
+@route('/<provider>/artists/<aid>/albums')
+@use_provider
+def albums_of_artist(req, provider, aid):
+    """show all albums of an artist identified by artist id"""
+    artist = get_model_or_raise(provider, ModelType.artist, aid)
+    return to_readall_reader(artist, 'albums').readall()

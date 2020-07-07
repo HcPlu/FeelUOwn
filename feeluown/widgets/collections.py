@@ -2,6 +2,7 @@ import logging
 from PyQt5.QtCore import pyqtSignal, Qt
 from PyQt5.QtWidgets import QAbstractItemView
 
+from feeluown.collection import DEFAULT_COLL_ALBUMS, DEFAULT_COLL_SONGS
 from .textlist import TextlistModel, TextlistView
 
 
@@ -19,7 +20,12 @@ class CollectionsModel(TextlistModel):
         row = index.row()
         item = self._items[row]
         if role == Qt.DisplayRole:
-            return '◎  ' + item.name
+            icon = '◎  '
+            if item.name == DEFAULT_COLL_SONGS:
+                icon = '♫  '
+            elif item.name == DEFAULT_COLL_ALBUMS:
+                icon = '◉  '
+            return icon + item.name
         if role == Qt.ToolTipRole:
             return item.fpath
         return super().data(index, role)
@@ -44,7 +50,8 @@ class CollectionsView(TextlistView):
         之后 dropMoveEvent 也就不会接收到这个事件。
         """
         mimedata = e.mimeData()
-        if mimedata.hasFormat('fuo-model/x-song'):
+        if mimedata.hasFormat('fuo-model/x-song') or \
+           mimedata.hasFormat('fuo-model/x-album'):
             e.accept()
         else:
             e.ignore()
@@ -63,13 +70,12 @@ class CollectionsView(TextlistView):
 
     def dropEvent(self, e):
         mimedata = e.mimeData()
-        assert mimedata.hasFormat('fuo-model/x-song')
-        song = mimedata.model
+        model = mimedata.model
         index = self.indexAt(e.pos())
         coll = index.data(Qt.UserRole)
         self._results[index.row] = (index, None)
         self.viewport().update()
-        is_success = coll.add(song)
+        is_success = coll.add(model)
         self._results[index.row] = (index, is_success)
         self.viewport().update()
         self._result_timer.start(2000)

@@ -1,5 +1,5 @@
 QWidget {
-    font-size: 13px;
+    /* font-size: 13px; */
     /* tips: you can turn on border for debugging */
     /* border: 1px solid red; */
 }
@@ -15,18 +15,27 @@ LeftPanel QListView {
     margin-left: 5px;
 }
 
-LeftPanel QListView, BottomPanel, QSplitter::handle, SongsTableView {
+LeftPanel QListView, QSplitter::handle {
     background-color: transparent;
 }
 
-DescriptionContainer, DescriptionContainer QLabel {
-    background-color: transparent;
+DescLabel {
+    background-color: palette(base);
+}
+
+MagicBox {
+    background: transparent;
+    border-bottom: 1px dashed #777;
+}
+MagicBox:focus {
+    border-bottom: 1px solid #777;
+    background: palette(window);
+    outline: none;
 }
 
 /*
  * buttons
  */
-
 PlayerControlPanel IconButton, VolumeButton {
     width: 30px;
     height: 30px;
@@ -47,46 +56,45 @@ PlayerControlPanel IconButton:hover, VolumeButton:hover {
     border: 1px solid #999;
     font-size: 12px;
 }
-PlayerControlPanel QPushButton:hover {
+PlayerControlPanel QPushButton:hover,
+PlayerControlPanel QPushButton:focus
+{
     outline: none;
 }
-PlayerControlPanel QPushButton:focus {
-    outline: none;
-}
-#pms_btn, #mv_btn, #toggle_video_btn, SongsTableToolbar QPushButton {
-    border-radius: 3px;
-    border: 1px solid #AAA;
-}
-#pms_btn {
+
+TextButton {
     height: 18px;
     background-color: transparent;
     padding: 2px 8px;
+    border-radius: 3px;
 }
-#mv_btn {
-    font-size: 9px;
-    padding: 0px 3px;
-    border: 1px solid #AAA;
-}
-#toggle_video_btn {
-    padding: 0px 3px;
-}
-SongsTableToolbar QPushButton {
-    padding: 2px 8px;
-}
-#mv_btn:hover, #pms_btn:hover, #toggle_video_btn:hover, SongsTableToolbar QPushButton:hover {
+TextButton:hover {
     border: 1px solid #777;
 }
-#mv_btn:pressed, #pms_btn:pressed {
-    background-color: #BCBCBC;
+#mv_btn, #lyric_btn {
+    font-size: 9px;
 }
-SongsTableToolbar QPushButton:pressed {
-    background-color: #EAEAEA;
+#mv_btn {
+    padding: 0px 3px;
 }
-
+#lyric_btn {
+    padding: 0px 5px;
+}
+#toggle_video_btn, #toggle_pip_btn {
+    padding: 0px 3px;
+}
 #back_btn, #forward_btn {
-    border: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 15px;
+    font-size: 15px;
+    border: 0px;
 }
-
 #back_btn:hover, #forward_btn:hover {
     background-color: #CCC;
+}
+
+LeftPanel ListViewContainer TextButton {
+    padding: 0px 2px;
+    border: none;
 }

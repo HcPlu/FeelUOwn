@@ -47,7 +47,7 @@ class Quality:
         )
 
         @classmethod
-        def apply(cls, source, l):
+        def apply(cls, source, l):  # noqa: E741
             """sort the list L using the policy parsed from SOURCE
 
             :param source: policy source string
@@ -106,7 +106,7 @@ class Quality:
             return l
 
         @staticmethod
-        def _get_index(q, l):
+        def _get_index(q, l):  # noqa: E741
             try:
                 q_idx = l.index(q)
             except ValueError:
@@ -192,26 +192,38 @@ class AudioMeta:
         )
 
 
+class ImageMeta:
+    def __init__(self, size=None, format=None):
+        self.size = size
+        self.format = format
+
+
 TYPE_METACLS_MAP = {
     MediaType.audio: AudioMeta,
+    MediaType.image: ImageMeta,
 }
 
 
 class Media:
 
-    def __init__(self, url, type_=MediaType.audio, **kwargs):
+    def __init__(self, url, type_=MediaType.audio, http_headers=None,
+                 **kwargs):
         if isinstance(url, Media):
             self._copy(url)
-        else:
-            self.url = url
-            self.type_ = type_
+            return
+        self.url = url
+        self.type_ = type_
 
-            metacls = TYPE_METACLS_MAP[type_]
-            self._metadata = metacls(**kwargs)
+        metacls = TYPE_METACLS_MAP[type_]
+        self._metadata = metacls(**kwargs)
+
+        # network options
+        self.http_headers = http_headers or {}
 
     @classmethod
     def _copy(self, media):
         self.url = media.url
+        self.http_headers = media.http_headers
         self.type_ = media.type_
         self._metadata = media._metadata
 

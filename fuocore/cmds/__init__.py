@@ -1,7 +1,7 @@
 import logging
 
-from fuocore.excs import FuocoreException
 from .base import cmd_handler_mapping
+from .excs import CmdException
 
 from .help import HelpHandler  # noqa
 from .status import StatusHandler  # noqa
@@ -14,14 +14,11 @@ from .exec_ import ExecHandler  # noqa
 logger = logging.getLogger(__name__)
 
 
-class CmdException(FuocoreException):
-    pass
-
-
 class Cmd:
-    def __init__(self, action, *args, **kwargs):
+    def __init__(self, action, *args, options=None):
         self.action = action
         self.args = args
+        self.options = options
 
     def __str__(self):
         return 'action:{} args:{}'.format(self.action, self.args)
@@ -38,7 +35,7 @@ class CmdResolver:
 cmd_resolver = CmdResolver(cmd_handler_mapping)
 
 
-def exec_cmd(cmd, *args, library, player, playlist, live_lyric):
+def exec_cmd(cmd, *args, app):
     """执行命令
 
     .. note::
@@ -47,6 +44,10 @@ def exec_cmd(cmd, *args, library, player, playlist, live_lyric):
         所以目前这里没有将 app 设计为参数。
         但在实践中，这个设计似乎会让代码可读性变差，是值得探讨的。
     """
+    library = app.library
+    player = app.player
+    playlist = app.playlist
+    live_lyric = app.live_lyric
 
     logger.debug('EXEC_CMD: ' + str(cmd))
 
@@ -55,15 +56,18 @@ def exec_cmd(cmd, *args, library, player, playlist, live_lyric):
         return False, 'cmd not found!'
 
     try:
-        handler = handler_cls(library=library,
+        handler = handler_cls(app=app,
+                              library=library,
                               player=player,
                               playlist=playlist,
                               live_lyric=live_lyric)
         rv = handler.handle(cmd)
+    except CmdException as e:
+        return False, str(e)
     except Exception:
         logger.exception('handle cmd({}) error'.format(cmd))
         return False, 'internal server error'
     else:
         if rv is None:
             rv = ''
-        return True, str(rv)
+        return True, rv

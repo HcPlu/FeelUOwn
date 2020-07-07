@@ -27,7 +27,7 @@ mac_plist_str = """<?xml version="1.0" encoding="UTF-8"?>
     <string>com.fuo.feeluown</string>
 </dict>
 </plist>
-"""
+"""  # noqa: E501
 
 win_linux_icon = """#!/usr/bin/env xdg-open
 [Desktop Entry]
@@ -91,10 +91,35 @@ def gen_for_win_linux():
     os.system('chmod +x {}'.format(desktop_file))
 
 
+def gen_for_win32():
+    from pyshortcuts import make_shortcut
+
+    # NOTE: do not use the pythonw.exe under sys.prefix, if Python is installed
+    # through window app store, the Python will have 'abnormal' behaviour::
+    #
+    #   the normal python.exe we run in cmd is located in directory like following:
+    #   C:\Users\user\AppData\Local\Microsoft\WindowsApps\
+    #     PythonSoftwareFoundation.Python.3.8_qbz5n2kfra8p0\pythonw.exe
+    #
+    #   but the python sys.prefix is like:
+    #   C:\Program Files\WindowsApps\
+    #     PythonSoftwareFoundation.Python.3.8_3.8.496.0_x64__qbz5n2kfra8p0
+    #
+    #   user can't directly run the python.exe under sys.prefix, windows
+    #   will tell user it has no priviledge to run this program
+    pyexe = os.path.join(os.path.dirname(sys.executable), 'pythonw')
+    command = '{} -m feeluown'.format(pyexe)
+    ico = HERE.parent.parent / 'icons' / 'feeluown.ico'
+    name = 'FeelUOwn'
+    make_shortcut(command, name=name, icon=ico, terminal=False)
+
+
 def generate_icon():
-    print('Generate icon, then you can see app in apps list.')
+    print('Generate icon, then you can see app on desktop.')
     if sys.platform.lower() == 'darwin':
         gen_for_mac()
+    elif sys.platform == 'win32':
+        gen_for_win32()
     else:
         gen_for_win_linux()
     print('Generate success.')

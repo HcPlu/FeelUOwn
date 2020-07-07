@@ -23,6 +23,7 @@ class Signal:
     """
     aioqueue = None
     has_aio_support = False
+    worker_task = None
 
     def __init__(self, name='', *sig):
         self.sig = sig
@@ -40,8 +41,18 @@ class Signal:
             import asyncio
             loop = asyncio.get_event_loop()
         cls.aioqueue = janus.Queue()
-        loop.create_task(Signal.worker())
+        cls.worker_task = loop.create_task(Signal.worker())
         cls.has_aio_support = True
+
+    @classmethod
+    def teardown_aio_support(cls):
+        """
+        HELP: maybe add a wait_aio_support_teardown method?
+        """
+        cls.aioqueue.close()
+        cls.worker_task.cancel()
+        cls.has_aio_support = False
+        cls.aioqueue = None
 
     @classmethod
     async def worker(cls):
@@ -51,7 +62,8 @@ class Signal:
             cls.aioqueue.async_q.task_done()
 
     def emit(self, *args):
-        for receiver in self.receivers:
+        # allow remove receiver during emitting
+        for receiver in self.receivers.copy():
             try:
                 if self._is_alive(receiver):
                     if isinstance(receiver, weakref.ReferenceType):

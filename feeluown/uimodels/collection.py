@@ -6,6 +6,7 @@ import base64
 
 from fuocore.utils import elfhash
 from feeluown.widgets.collections import CollectionsModel
+from feeluown.collection import CollectionType
 
 
 class CollectionUiManager:
@@ -40,5 +41,18 @@ class CollectionUiManager:
         self._scan()
 
     def _scan(self):
+        colls = []
+        song_coll = None
+        album_coll = None
         for coll in self._app.coll_mgr.scan():
+            if coll.type == CollectionType.sys_song:
+                song_coll = coll
+                continue
+            if coll.type == CollectionType.sys_album:
+                album_coll = coll
+                continue
+            colls.append(coll)
+        colls.insert(0, album_coll)
+        colls.insert(0, song_coll)
+        for coll in colls:
             self.add(coll)

@@ -1,6 +1,200 @@
 Changelog
 ---------
 
+3.5.1 (2020-07-01)
+""""""""""""""""""""""
+- bugfix
+  - 请求歌词慢时，切换歌曲会卡顿
+- feat
+  - 支持画中画模式
+  - 支持折叠左边列表
+  - 支持右键当前正在播放的歌曲
+
+3.5 (2020-06-12)
+""""""""""""""""""""""
+
+3.5a0 (2020-06-03)
+""""""""""""""""""""""
+- 去掉 Python 3.5 支持
+- 修复 daemon 模式不能运行的 bug
+- 修复 AUDIO_SELECT_POLICY 不生效的问题
+- 兼容老版本的 libmpv（兼容 Ubuntu 18.04 ）
+- 给 library 添加 `provider_added/provider_removed` 两个信号
+- 添加配置项 `PROVIDERS_STANDBY`
+- 添加信号 `app.ui.songs_table.about_to_show_menu`
+
+3.4.1 (2020-03-21)
+""""""""""""""""""""""
+- feat: 歌词窗口
+- feat: 退出时状态保存
+- enhance:
+  - 搜索功能增强
+  - 加快在 windows 上的启动速度
+  - 统一按钮样式，避免在 Linux/Windows 看起来奇怪
+  - 右边主题样式优化
+- refactor:
+  - player 对象不关心 song 对象，只处理 media 对象
+
+3.4 (2020-03-21)
+""""""""""""""""""""""
+- bugfix: 音量滑动条随着音量变化而变化
+- bugfix: 遇到不能播放的歌曲时，fm 模式会自动退出
+
+3.4b2 (2020-03-11)
+""""""""""""""""""""""
+- bugfix: 没安装 qasync 的时候 fallback 到 daemon 模式
+
+3.4b1 (2020-03-09)
+""""""""""""""""""""""
+- bugfix: 修复 mpris2 不能正常启动的问题
+
+3.4b0 (2020-03-08)
+""""""""""""""""""""""
+
+
+3.4a4 (2020-03-08)
+""""""""""""""""""""""
+- feat: add `macos_dark` theme
+
+3.4a3 (2020-03-08)
+""""""""""""""""""""""
+- xxx: hide scrollbar on Linux
+
+3.4a2 (2020-03-08)
+""""""""""""""""""""""
+- refactor: 亮色主题绘制背景图片
+
+3.4a1 (2020-03-08)
+""""""""""""""""""""""
+- bugfix: 加载 collection 失败
+
+3.4a0 (2020-03-07)
+""""""""""""""""""""""
+
+**feature**
+
+- 支持 ALLOW_LAN_CONNECT 配置
+- 更好的支持视频播放
+- 添加 fuocore.serializers 包
+- 内置 mpris2 支持
+
+**bugfix**
+
+- 使用 qasync 包替换 quamash 以支持 Python 3.8
+
+3.3.10 (2020-02-12)
+""""""""""""""""""""""
+**bugfix**
+
+- 修复有时激活 fm 模式失败的问题
+
+**feature**
+
+- 性能：支持在 1s 内往播放列表添加上万首歌曲
+- UserModel 添加 `rev_songs` 等若干属性
+
+3.3.9 (2020-02-08)
+""""""""""""""""""""
+**feature**
+
+- 提供 FM 模式支持
+- 支持从环境变量 `MPV_DYLIB_PATH` 中读取 libmpv 地址
+
+**bugfix**
+
+- 修复 `fuo add playlist` 有时不生效的问题
+- 修复 `fuo status` 命令有时失败的问题
+
+**other**
+
+- 添加简单的集成测试
+
+3.3.8 (2020-02-03)
+""""""""""""""""""""
+- bugfix: app crash on non-macos
+
+3.3.7 (2020-02-03)
+""""""""""""""""""""
+**feature**
+
+- fuo 协议支持解析 `show fuo://<provider>/playlists/<pid>/songs`
+- 系统主题切换时，自动切换 feeluown 主题
+
+**bugfix**
+
+- debug 命令行选项不生效
+- 修复 album 列表显示不完整的 bug
+- 界面上先显示 Songs/Albums 这两个收藏集
+
+3.3.6 (2020-01-30)
+""""""""""""""""""""
+- feat: 支持 genicon 子命令
+
+3.3.5 (2020-01-30)
+""""""""""""""""""""
+- feat: 支持 genicon 子命令
+
+3.3.4 (2020-01-30)
+""""""""""""""""""""
+- feat: 支持在 windows 下生成桌面快捷方式
+
+3.3.3 (2020-01-29)
+""""""""""""""""""""
+
+- bugfix: windows 启动失败
+- bugfix: macOS 生成图标失败
+
+3.3.2 (2020-01-28)
+""""""""""""""""""""
+
+**feature**
+
+- 将 app 实例暴露给 fuoexec
+- 支持拖拽专辑到本地收藏
+
+**enhance**
+
+- 优化 歌手/专辑 简介的展示
+- 优化暗色背景下，歌手图片的展示
+- 支持查看专辑简介
+
+**other**
+
+- 为 feeluown.collection 模块添加单元测试
+
+3.3.1 (2020-01-27)
+""""""""""""""""""""
+- bugfix: 修复专辑列表不能显示所有专辑的 bug
+- enhance: 绑定前进/后退快捷键
+- enhance: 歌曲列表支持一次移出多首歌曲
+
+3.3 (2020-01-26)
+"""""""""""""""""""""
+- bugfix; 修复多个导致 app crash 的 bug
+- feat: 新的歌手详情页界面
+- enhance: 改善专辑列表展示
+- refactor: 将 widgets 包拆分成 containers 和 widgets
+
+3.2a0 (2019-11-26)
+"""""""""""""""""""""
+
+
+3.1.1 (2019-10-28)
+"""""""""""""""""""""
+- bugfix: 正确处理 song 为 None 的情况
+
+3.1 (2019-10-28)
+"""""""""""""""""""""
+- refactor: 重构 `__main__` 模块，加入 `entry_points` 包
+- refactor: 加入 fuoexec 模块
+- feat: 支持在 macOS 上生成 .app 文件
+- feat: 支持搜索歌手，专辑，播放列表，比如 ``fuo search 理性与感性 type=album``
+- feat: 可以播放 Youtube 的 url，比如 ``fuo play https://youtube.com/xxx``
+- feat: 支持展示歌手专辑列表
+- enhance: 对于大的播放列表，仍然可以播放全部
+- enhance: 当 provider API 失效时，也能为歌曲找替代品
+- bugfix: 若干已知 bugfix
+
 3.0.1 (2019-06-30)
 """""""""""""""""""""
 - bugfix: 将 pytest-runner 从 setup_requires 移除

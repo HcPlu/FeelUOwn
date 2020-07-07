@@ -1,7 +1,3 @@
-RightPanel {
-    background-color: #FFF;
-}
-
 TopPanel {
     background-color: qlineargradient(
         x1: 0, y1: 0, x2: 0, y2: 1,
@@ -9,11 +5,12 @@ TopPanel {
     );
 }
 
-#mv_btn:pressed, #pms_btn:pressed {
-    background-color: #BCBCBC;
+TextButton {
+    border: 1px solid #AAA;
 }
-TableToolbar QPushButton:pressed {
-    background-color: #EAEAEA;
+
+TextButton:pressed {
+    background-color: #DDD;
 }
 
 #pp_btn {

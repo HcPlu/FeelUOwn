@@ -1,8 +1,5 @@
 from collections import defaultdict
 import logging
-from threading import Thread
-
-from fuocore.thread_tcp_server import TcpServer
 
 
 logger = logging.getLogger(__name__)
@@ -12,10 +9,10 @@ class DeadSubscriber(Exception):
     pass
 
 
-class Subscriber(object):
+class Subscriber:
     def __init__(self, addr, conn):
         self._addr = addr
-        self._conn = conn
+        self.writer = conn
 
     def __eq__(self, obj):
         return self._addr == obj._addr
@@ -26,14 +23,14 @@ class Subscriber(object):
 
 def sendto_subscriber(subscriber, msg):
     try:
-        subscriber._conn.send(bytes(msg, 'utf-8'))
+        subscriber.writer.write(bytes(msg, 'utf-8'))
     except BrokenPipeError:
-        subscriber._conn.close()
+        subscriber.writer.close()
         del subscriber
         raise DeadSubscriber
 
 
-class Gateway(object):
+class Gateway:
     def __init__(self):
         self.topics = set()
         self._relations = defaultdict(set)  # {'topic': subscriber_set}
@@ -69,54 +66,66 @@ class Gateway(object):
                 break
 
 
-def handle(conn, addr, gateway, *args, **kwargs):
+class HandlerV1:
     """
-    NOTE: use tcp instead of udp because some operations need ack
+    pubsub protocol 1.0
+    -------------------
+
+    we only handle one request::
+
+        sub <topic>
+
+    For example::
+
+        sub topic.live_lyric  # deprecated
+
+    The response will be a line ends with \r\n::
+
+        Oops <err_msg>        # failed
+        OK                    # ok
     """
-    conn.sendall(b'OK pubsub 1.0\n')
-    while True:
-        try:
-            s = conn.recv(1024).decode('utf-8').strip()
-            if not s:
-                conn.close()
+    def __init__(self, gateway):
+        self.gateway = gateway
+
+    async def handle(self, reader, writer):
+        gateway = self.gateway
+
+        # send pubsub server version info
+        writer.write(b'OK pubsub 1.0\r\n')
+        while True:
+            try:
+                line = await reader.readline()
+            except ConnectionResetError:
+                logger.debug('Client close the connection.')
                 break
-        except ConnectionResetError:
-            logger.debug('Client close the connection.')
-            break
 
-        parts = s.split(' ')
-        if len(parts) != 2:
-            conn.send(b"Invalid command\n")
-            continue
-        cmd, topic = parts
-        if cmd.lower() != 'sub':
-            conn.send(bytes("Unknown command '{}'\n".format(cmd.lower()), 'utf-8'))
-            continue
-        if topic not in gateway.topics:
-            conn.send(bytes("Unknown topic '{}'\n".format(topic), 'utf-8'))
-            continue
-        conn.sendall(bytes('ACK {} {}\n'.format(cmd, topic), 'utf-8'))
-        subscriber = Subscriber(addr, conn)
-        gateway.link(topic, subscriber)
-        break
+            if line == b'':  # connection closed
+                writer.close()
+                break
 
-
-def run(host='0.0.0.0', port=23334):
-    gateway = Gateway()
-    server = TcpServer(handle_func=handle, host=host, port=port)
-    t = Thread(target=server.run, args=(gateway,), name='TcpServerThread')
-    server.thread = t
-    t.setDaemon(True)
-    t.start()
-    logger.info('Fuo pubsub server running  at {host}:{port}'.format(
-        host=host, port=port))
-    return gateway, server
-
-
-if __name__ == '__main__':
-    import time
-    gateway, server = run()
-    gateway.add_topic('topic.live_lyric')
-    while True:
-        time.sleep(1)
-        gateway.publish('miao\n', 'topic.live_lyric')
+            # handle `sub <topic>` command
+            err = 'Oops {reason}'
+            reason = None
+            try:
+                cmd, topic = line.decode('utf-8').strip().split(' ')
+            except ValueError:
+                reason = 'invalid request'
+            else:
+                if cmd.lower() != 'sub':
+                    reason = 'unknown command'
+                else:
+                    if topic.startswith('topic.'):
+                        topic = topic[6:]
+                    if topic not in gateway.topics:
+                        reason = "unknown topic '{}'".format(topic)
+            if reason is not None:
+                msg = err.format(reason=reason)
+                writer.write(bytes(msg, 'utf-8'))
+                writer.write(b'\r\n')
+                continue
+            else:
+                writer.write(b'OK\r\n')
+                peername = writer.get_extra_info('peername')
+                subscriber = Subscriber(peername, writer)
+                gateway.link(topic, subscriber)
+                break
